@@ -6,6 +6,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/InteractionComponent.h"
+#include "TimerManager.h"
 
 // Sets default values
 ASurvivalCharacter::ASurvivalCharacter()
@@ -175,18 +176,123 @@ void ASurvivalCharacter::PerformInteractionCheck()
 
 void ASurvivalCharacter::CouldntFindInteractable()
 {
-	UE_LOG(LogTemp, Warning, TEXT("We did not find an interactable"));
+	if (InteractionData.ViewedInteractionComponent)
+	{
+		// if we didnt find an interactable but we currently are looking at one, that means we stopped looking
+		// so we hide it
+		InteractionData.ViewedInteractionComponent->SetHiddenInGame(true);
+	}
 }
 
 void ASurvivalCharacter::FoundNewInteractable(UInteractionComponent* Interactable)
 {
 	UE_LOG(LogTemp, Warning, TEXT("We found an interactable"));
+
+	if (Interactable)
+	{
+		// show the interaction card in game
+		Interactable->SetHiddenInGame(false);
+
+		// set the current interactable in the interaction data
+		InteractionData.ViewedInteractionComponent = Interactable;
+	}
+}
+
+void ASurvivalCharacter::BeginInteract()
+{
+	// if we're not the server
+	if (!HasAuthority())
+	{
+		// we wanna call begin interact on the server
+		ServerBeginInteract();
+	}
+
+	InteractionData.bInteractHeld = true;
+
+	// if it has an interactable component
+	if (UInteractionComponent* Interactable = GetInteractable())
+	{
+		Interactable->BeginInteract(this);
+
+		// if interaction time is smol
+		if (FMath::IsNearlyZero(Interactable->InteractionTime))
+		{
+			Interact();
+		}
+		else
+		{
+			// now we gotta wait to interact. set a timer to call interact function after the interaction time has elapsed
+			GetWorldTimerManager().SetTimer(TimerHandle_Interact, this, &ASurvivalCharacter::Interact, Interactable->InteractionTime, false);
+		}
+	}
+}
+
+void ASurvivalCharacter::EndInteract()
+{
+	// if we're not the server
+	if (!HasAuthority())
+	{
+		// we wanna call end interact on the server
+		ServerEndInteract();
+	}
+
+	InteractionData.bInteractHeld = false;
+
+	// clear the interaction duration timer if the timer was running
+	GetWorldTimerManager().ClearTimer(TimerHandle_Interact);
+
+	if (UInteractionComponent* Interactable = GetInteractable())
+	{
+		Interactable->EndInteract(this);
+	}
+}
+
+void ASurvivalCharacter::ServerBeginInteract_Implementation()
+{
+	// we just call the begin interact function on the server
+	BeginInteract();
+}
+
+bool ASurvivalCharacter::ServerBeginInteract_Validate()
+{
+	// go ahead with the RPC, assume everything will work properly
+	return true;
+}
+
+void ASurvivalCharacter::ServerEndInteract_Implementation()
+{
+	// we just call the end interact function on the server
+	EndInteract();
+}
+
+bool ASurvivalCharacter::ServerEndInteract_Validate()
+{
+	// go ahead with the RPC, assume everything will work properly
+	return true;
+}
+
+void ASurvivalCharacter::Interact()
+{
+
+
+	// clear the interaction duration timer if the timer was running
+	GetWorldTimerManager().ClearTimer(TimerHandle_Interact);
+
+	// we call the interactable's interact function
+	if (UInteractionComponent* Interactable = GetInteractable())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("INTERACTED WITH AN OBJECT"));
+		Interactable->Interact(this);
+	}
 }
 
 // Called to bind functionality to input
 void ASurvivalCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+	PlayerInputComponent->BindAction("Interact", IE_Pressed, this, &ASurvivalCharacter::BeginInteract);
+	PlayerInputComponent->BindAction("Interact", IE_Released, this, &ASurvivalCharacter::EndInteract);
 
 	PlayerInputComponent->BindAction("Jump", IE_Pressed, this, &ACharacter::Jump);
 	PlayerInputComponent->BindAction("Jump", IE_Released, this, &ACharacter::StopJumping);

@@ -89,6 +89,15 @@ protected:
 	void BeginInteract();
 	void EndInteract();
 
+	// We make some Remote Procedure Calls (RPCs) for our functions
+
+	// Reliable means it will always try to call the function even if connection is laggy
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerBeginInteract();
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void ServerEndInteract();
+
 	void Interact();
 
 	// Information about the current state of the players interaction
@@ -97,6 +106,8 @@ protected:
 
 	// Helper function to make grabbing interatable faster
 	FORCEINLINE class UInteractionComponent* GetInteractable() const { return InteractionData.ViewedInteractionComponent;  }
+
+	FTimerHandle TimerHandle_Interact;
 
 	void StartCrouching();
 	void StopCrouching();
