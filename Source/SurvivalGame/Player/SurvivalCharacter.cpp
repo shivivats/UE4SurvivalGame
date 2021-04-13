@@ -61,6 +61,18 @@ void ASurvivalCharacter::BeginPlay()
 	
 }
 
+bool ASurvivalCharacter::IsInteracting() const
+{
+	// check if the timer is active
+	return GetWorldTimerManager().IsTimerActive(TimerHandle_Interact);
+}
+
+float ASurvivalCharacter::GetRemainingInteractTime() const
+{
+	// simply return the time remaining
+	return GetWorldTimerManager().GetTimerRemaining(TimerHandle_Interact);
+}
+
 void ASurvivalCharacter::StartCrouching()
 {
 	Crouch();
@@ -110,9 +122,21 @@ void ASurvivalCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	// Every tick, we are going to perform an interaction check
-	PerformInteractionCheck();
+	const bool bIsInteractingOnServer = (HasAuthority() && IsInteracting());
 
+	//UE_LOG(LogTemp, Warning, TEXT("time since last check is %f"), GetWorld()->TimeSince(InteractionData.LastInteractionCheckTime));
+	//UE_LOG(LogTemp, Warning, TEXT("interaction check frequency is %f"), InteractionCheckFrequency);
+
+	//UE_LOG(LogTemp, Warning, TEXT("bIsInteractingOnServer is %s"), (bIsInteractingOnServer ? TEXT("true") : TEXT("false")));
+	//UE_LOG(LogTemp, Warning, TEXT("HasAuthority is %s"), (HasAuthority() ? TEXT("true") : TEXT("false")));
+	//UE_LOG(LogTemp, Warning, TEXT("interaction check frequency is %s"), ());
+
+	// if we're not the server or we're interacting on the server, and only do it according to the interaction frequency
+	if ((!HasAuthority() || bIsInteractingOnServer) && (GetWorld()->TimeSince(InteractionData.LastInteractionCheckTime) >= InteractionCheckFrequency))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("performing interaction check"));
+		PerformInteractionCheck();
+	}
 }
 
 // Main function that is going to handle if we're looking at an interactable object or not
@@ -148,15 +172,19 @@ void ASurvivalCharacter::PerformInteractionCheck()
 		// Check if we hit something
 		if (TraceHit.GetActor())
 		{
+			UE_LOG(LogTemp, Warning, TEXT("saw an object"));
 			// Check if the thing we hit is an interactable
 			if (UInteractionComponent* InteractionComponent = Cast<UInteractionComponent>(TraceHit.GetActor()->GetComponentByClass(UInteractionComponent::StaticClass())))
 			{
+				UE_LOG(LogTemp, Warning, TEXT("saw an interactable object"));
+
 				// Get how far away we are from the object
 				float Distance = (TraceStart - TraceHit.ImpactPoint).Size();
 
 				// we found interactable and we are within distance
 				if (InteractionComponent != GetInteractable() && Distance <= InteractionComponent->InteractionDistance)
 				{
+					
 					FoundNewInteractable(InteractionComponent);
 				}
 				// we found interactable but we are not within distance
@@ -176,26 +204,40 @@ void ASurvivalCharacter::PerformInteractionCheck()
 
 void ASurvivalCharacter::CouldntFindInteractable()
 {
-	if (InteractionData.ViewedInteractionComponent)
+	// We've lost the interactable. clear the timer
+	if (GetWorldTimerManager().IsTimerActive(TimerHandle_Interact))
 	{
-		// if we didnt find an interactable but we currently are looking at one, that means we stopped looking
-		// so we hide it
-		InteractionData.ViewedInteractionComponent->SetHiddenInGame(true);
+		GetWorldTimerManager().ClearTimer(TimerHandle_Interact);
 	}
+
+	// Tell the interactable we've stopped focusing on it and clear the current interactable
+	if (UInteractionComponent* Interactable = GetInteractable())
+	{
+		Interactable->EndFocus(this);
+
+		if (InteractionData.bInteractHeld)
+		{
+			EndInteract();
+		}
+	}
+
+	// arent viewing any interactable anymore
+	InteractionData.ViewedInteractionComponent = nullptr;
 }
 
 void ASurvivalCharacter::FoundNewInteractable(UInteractionComponent* Interactable)
 {
-	UE_LOG(LogTemp, Warning, TEXT("We found an interactable"));
+	// when we find a new interactable, first stop interacting with any current interactable
+	EndInteract();
 
-	if (Interactable)
+	// remove focus from the old interactable if any
+	if (UInteractionComponent* OldInteractable = GetInteractable())
 	{
-		// show the interaction card in game
-		Interactable->SetHiddenInGame(false);
-
-		// set the current interactable in the interaction data
-		InteractionData.ViewedInteractionComponent = Interactable;
+		OldInteractable->EndFocus(this);
 	}
+
+	InteractionData.ViewedInteractionComponent = Interactable;
+	Interactable->BeginFocus(this);
 }
 
 void ASurvivalCharacter::BeginInteract()
@@ -212,6 +254,8 @@ void ASurvivalCharacter::BeginInteract()
 	// if it has an interactable component
 	if (UInteractionComponent* Interactable = GetInteractable())
 	{
+		UE_LOG(LogTemp, Warning, TEXT("try to interact with an object"));
+
 		Interactable->BeginInteract(this);
 
 		// if interaction time is smol
@@ -273,8 +317,6 @@ bool ASurvivalCharacter::ServerEndInteract_Validate()
 
 void ASurvivalCharacter::Interact()
 {
-
-
 	// clear the interaction duration timer if the timer was running
 	GetWorldTimerManager().ClearTimer(TimerHandle_Interact);
 
